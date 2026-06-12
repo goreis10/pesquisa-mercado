@@ -9,6 +9,9 @@
  *      extrai a tabela de dados de cada métrica e baixa um CSV
  *      nomeado como: NN_NomeDoPin_Metrica.csv
  *
+ * Para cada pin ele baixa os 4 CSVs (Estoque, Venda Líquida,
+ * Preço Médio M², Preço Médio) ANTES de passar para o próximo pin.
+ *
  * Exemplo de arquivos gerados:
  *   01_Brumana_Estoque.csv
  *   01_Brumana_Venda_Liquida.csv
@@ -25,11 +28,21 @@
   const metrics = ['Estoque', 'Venda Líquida', 'Preço Médio M²', 'Preço Médio'];
   const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
 
+  // ── Normaliza texto para comparação (sem acento, minúsculo) ─────────────
+  function norm(s) {
+    return (s || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/²/g, '2')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   // ── Sanitiza nomes para uso em arquivo ──────────────────────────────────
   function sanitize(name) {
-    return name
-      .normalize('NFD').replace(/[̀-ͯ]/g, '') // remove acentos
-      .replace(/[²]/g, '2')
+    return (name || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/²/g, '2')
       .replace(/[^a-zA-Z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '')
       .slice(0, 60);
@@ -42,9 +55,7 @@
       [...row.querySelectorAll('th,td')]
         .map(cell => {
           let text = cell.textContent.trim().replace(/"/g, '""');
-          if (text.includes(',') || text.includes('"') || text.includes('\n') || text.includes(';')) {
-            text = `"${text}"`;
-          }
+          if (/[",;\n]/.test(text)) text = `"${text}"`;
           return text;
         })
         .join(';')
@@ -61,29 +72,60 @@
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  // ── Abre o menu do gráfico e clica numa opção pelo texto ────────────────
-  async function clicarOpcaoMenu(textoOpcao) {
+  // ── Abre o menu do gráfico e clica num item por uma lista de rótulos ─────
+  // Retorna o rótulo que foi clicado, ou null se nenhum encontrado.
+  async function clicarItemMenu(rotulosAceitos) {
     const menuBtn = document.querySelector('g.highcharts-contextbutton, .highcharts-contextbutton');
-    if (!menuBtn) return false;
+    if (!menuBtn) return null;
 
     menuBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-    await sleep(600);
+    await sleep(500);
 
-    const item = [...document.querySelectorAll('div, span, li, button')]
-      .find(el => el.offsetParent !== null && el.textContent.trim() === textoOpcao);
+    const candidatos = [...document.querySelectorAll(
+      '.highcharts-menu-item, li[role="menuitem"], .highcharts-menu li, div, span, li, button'
+    )];
+    const alvo = candidatos.find(el =>
+      el.offsetParent !== null && rotulosAceitos.includes(el.textContent.trim())
+    );
 
-    if (!item) {
-      document.body.click();
-      await sleep(300);
-      return false;
+    if (!alvo) {
+      document.body.click(); // fecha o menu
+      await sleep(200);
+      return null;
     }
+    const rotulo = alvo.textContent.trim();
+    alvo.click();
+    await sleep(500);
+    return rotulo;
+  }
 
-    item.click();
-    await sleep(600);
-    return true;
+  // ── Garante que a tabela de dados esteja ABERTA; retorna a <table> ──────
+  async function abrirTabela() {
+    let table = document.querySelector('.highcharts-data-table table');
+    if (table) return table;
+    await clicarItemMenu(['View data table', 'Ver tabela de dados', 'Mostrar tabela de dados']);
+    await sleep(700);
+    return document.querySelector('.highcharts-data-table table');
+  }
+
+  // ── Garante que a tabela de dados esteja FECHADA ────────────────────────
+  async function fecharTabela() {
+    const table = document.querySelector('.highcharts-data-table table');
+    if (!table) return;
+    await clicarItemMenu(['Hide data table', 'Ocultar tabela de dados', 'Esconder tabela de dados']);
+    await sleep(400);
+    // se ainda existir (rótulo diferente), remove do DOM como último recurso
+    const ainda = document.querySelector('.highcharts-data-table');
+    if (ainda) ainda.remove();
+  }
+
+  // ── Texto da legenda/subtítulo atual do gráfico (a métrica em exibição) ──
+  function metricaAtual() {
+    const sub = document.querySelector('.highcharts-subtitle');
+    return sub ? sub.textContent.trim() : '';
   }
 
   // ── Baixa os 4 CSVs do modal aberto ─────────────────────────────────────
@@ -121,10 +163,8 @@
         continue;
       }
 
-      // Remove qualquer tabela de dados que tenha ficado da métrica anterior
-      document.querySelectorAll('.highcharts-data-table').forEach(el => el.remove());
-      document.body.click(); // garante que nenhum menu fique aberto
-      await sleep(300);
+      // Garante que a tabela da métrica anterior esteja fechada (estado limpo)
+      await fecharTabela();
 
       // Seleciona a métrica
       nativeSetter.call(select, opt.value);
@@ -132,31 +172,36 @@
       select.dispatchEvent(new Event('change', { bubbles: true }));
       await sleep(1800);
 
-      // Abre "View data table"
-      let abriu = await clicarOpcaoMenu('View data table');
-      let table = document.querySelector('.highcharts-data-table table');
-
-      if (!table) {
+      // Verifica (com retentativas) se o gráfico realmente trocou de métrica
+      let tentativas = 0;
+      while (tentativas < 4 && norm(metricaAtual()) && norm(metricaAtual()) !== norm(metric)) {
         await sleep(700);
-        table = document.querySelector('.highcharts-data-table table');
+        tentativas++;
+      }
+      const subAtual = metricaAtual();
+      if (subAtual && norm(subAtual) !== norm(metric)) {
+        warn(`[${label}] Gráfico ainda mostra "${subAtual}" ao pedir "${metric}" — usando legenda real no nome.`);
       }
 
+      // Abre a tabela de dados
+      const table = await abrirTabela();
       if (!table) {
         warn(`[${label}] Tabela de dados não encontrada para "${metric}".`);
         continue;
       }
 
+      // Nome do arquivo: usa a legenda REAL do gráfico (mais confiável); senão, a métrica pedida
+      const metricLabel = subAtual ? subAtual : metric;
       const csv = tableToCSV(table);
-      const safeMetric = sanitize(metric);
+      const safeMetric = sanitize(metricLabel);
       const filename = `${String(pinNum).padStart(2, '0')}_${safeLabel}_${safeMetric}.csv`;
       downloadCSV(csv, filename);
       baixados++;
       log(`  [${label}] CSV baixado: ${filename}`);
       await sleep(800);
 
-      // Remove a tabela de dados diretamente do DOM (evita depender do toggle do menu)
-      document.querySelectorAll('.highcharts-data-table').forEach(el => el.remove());
-      await sleep(300);
+      // Fecha a tabela para a próxima métrica
+      await fecharTabela();
     }
     return baixados;
   }
