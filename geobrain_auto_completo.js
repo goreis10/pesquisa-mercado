@@ -121,6 +121,11 @@
         continue;
       }
 
+      // Remove qualquer tabela de dados que tenha ficado da métrica anterior
+      document.querySelectorAll('.highcharts-data-table').forEach(el => el.remove());
+      document.body.click(); // garante que nenhum menu fique aberto
+      await sleep(300);
+
       // Seleciona a métrica
       nativeSetter.call(select, opt.value);
       select.dispatchEvent(new Event('input', { bubbles: true }));
@@ -128,18 +133,16 @@
       await sleep(1800);
 
       // Abre "View data table"
-      const abriu = await clicarOpcaoMenu('View data table');
-      if (!abriu) {
-        warn(`[${label}] "View data table" não encontrado para "${metric}".`);
-        continue;
-      }
-      await sleep(600);
+      let abriu = await clicarOpcaoMenu('View data table');
+      let table = document.querySelector('.highcharts-data-table table');
 
-      // Extrai a tabela
-      const table = document.querySelector('.highcharts-data-table table');
+      if (!table) {
+        await sleep(700);
+        table = document.querySelector('.highcharts-data-table table');
+      }
+
       if (!table) {
         warn(`[${label}] Tabela de dados não encontrada para "${metric}".`);
-        await clicarOpcaoMenu('View data table'); // tenta fechar de volta
         continue;
       }
 
@@ -151,9 +154,9 @@
       log(`  [${label}] CSV baixado: ${filename}`);
       await sleep(800);
 
-      // Fecha a tabela de dados (toggle)
-      await clicarOpcaoMenu('View data table');
-      await sleep(400);
+      // Remove a tabela de dados diretamente do DOM (evita depender do toggle do menu)
+      document.querySelectorAll('.highcharts-data-table').forEach(el => el.remove());
+      await sleep(300);
     }
     return baixados;
   }
