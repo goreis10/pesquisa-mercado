@@ -102,24 +102,28 @@
     return rotulo;
   }
 
-  // ── Garante que a tabela de dados esteja ABERTA; retorna a <table> ──────
-  async function abrirTabela() {
-    let table = document.querySelector('.highcharts-data-table table');
-    if (table) return table;
-    await clicarItemMenu(['View data table', 'Ver tabela de dados', 'Mostrar tabela de dados']);
-    await sleep(700);
-    return document.querySelector('.highcharts-data-table table');
+  // ── Rótulos possíveis do item que alterna a tabela de dados ─────────────
+  // No GeoBrain é um TOGGLE único ("View data table") que mostra/esconde —
+  // o rótulo não muda. Incluímos variações por segurança.
+  const ROTULOS_TABELA = [
+    'View data table', 'Hide data table',
+    'Ver tabela de dados', 'Ocultar tabela de dados',
+    'Mostrar tabela de dados', 'Esconder tabela de dados',
+  ];
+
+  function tabelaVisivel() {
+    return !!document.querySelector('.highcharts-data-table table');
   }
 
-  // ── Garante que a tabela de dados esteja FECHADA ────────────────────────
-  async function fecharTabela() {
-    const table = document.querySelector('.highcharts-data-table table');
-    if (!table) return;
-    await clicarItemMenu(['Hide data table', 'Ocultar tabela de dados', 'Esconder tabela de dados']);
-    await sleep(400);
-    // se ainda existir (rótulo diferente), remove do DOM como último recurso
-    const ainda = document.querySelector('.highcharts-data-table');
-    if (ainda) ainda.remove();
+  // ── Alterna o toggle até a tabela ficar no estado desejado ──────────────
+  // NUNCA remove do DOM (isso dessincronizava o estado interno do Highcharts).
+  async function setTabela(desejadoVisivel) {
+    for (let i = 0; i < 4; i++) {
+      if (tabelaVisivel() === desejadoVisivel) return tabelaVisivel();
+      await clicarItemMenu(ROTULOS_TABELA); // clica o toggle (qualquer rótulo)
+      await sleep(700);
+    }
+    return tabelaVisivel();
   }
 
   // ── Texto da legenda/subtítulo atual do gráfico (a métrica em exibição) ──
@@ -163,8 +167,8 @@
         continue;
       }
 
-      // Garante que a tabela da métrica anterior esteja fechada (estado limpo)
-      await fecharTabela();
+      // Garante que a tabela da métrica anterior esteja FECHADA (estado limpo)
+      await setTabela(false);
 
       // Seleciona a métrica
       nativeSetter.call(select, opt.value);
@@ -183,10 +187,11 @@
         warn(`[${label}] Gráfico ainda mostra "${subAtual}" ao pedir "${metric}" — usando legenda real no nome.`);
       }
 
-      // Abre a tabela de dados
-      const table = await abrirTabela();
+      // ABRE a tabela de dados (alterna o toggle até aparecer)
+      await setTabela(true);
+      const table = document.querySelector('.highcharts-data-table table');
       if (!table) {
-        warn(`[${label}] Tabela de dados não encontrada para "${metric}".`);
+        warn(`[${label}] Tabela de dados não apareceu para "${metric}".`);
         continue;
       }
 
@@ -200,8 +205,8 @@
       log(`  [${label}] CSV baixado: ${filename}`);
       await sleep(800);
 
-      // Fecha a tabela para a próxima métrica
-      await fecharTabela();
+      // FECHA a tabela para a próxima métrica (mantém o estado sincronizado)
+      await setTabela(false);
     }
     return baixados;
   }
